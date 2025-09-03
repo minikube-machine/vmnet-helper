@@ -1,0 +1,131 @@
+---
+name: mirror-upstream-release
+
+'on':
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tags: ${{ steps.tags.outputs.tags }}
+      latest_tag: ${{ steps.tags.outputs.latest_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Configure git
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email github-actions[bot]@users.noreply.github.com
+      - name: Determine tags to mirror
+        id: tags
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/nirs/vmnet-helper.git
+          git fetch upstream --tags
+          upstream_tags=$(git ls-remote --refs --tags upstream | \
+            awk '{print $2}' | sed 's|refs/tags/||' | sort -V)
+          origin_tags=$(git ls-remote --refs --tags origin 2>/dev/null | \
+            awk '{print $2}' | sed 's|refs/tags/||' | sort -V)
+          missing_tags=""
+          for tag in $upstream_tags; do
+            if ! echo "$origin_tags" | grep -q "^$tag$"; then
+              missing_tags="$missing_tags $tag"
+              git fetch upstream "refs/tags/$tag:refs/tags/$tag"
+              git push origin "refs/tags/$tag:refs/tags/$tag"
+              if gh release view "$tag" >/dev/null 2>&1; then
+                echo "Release $tag already exists"
+              else
+                gh release create "$tag" -t "$tag" -n "Mirror of upstream release $tag"
+              fi
+            fi
+          done
+          tags_json=$(printf '%s\n' $missing_tags | \
+            python -c 'import sys,json; print(json.dumps([t for t in sys.stdin.read().split() if t]))')
+          echo "tags=$tags_json" >> $GITHUB_OUTPUT
+          latest_tag=$(printf '%s\n' $upstream_tags | tail -n1)
+          echo "latest_tag=$latest_tag" >> $GITHUB_OUTPUT
+
+  build:
+    needs: discover
+    if: needs.discover.outputs.tags != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: ${{ fromJson(needs.discover.outputs.tags) }}
+        platform: [macos-13, macos-15]
+    runs-on: ${{ matrix.platform }}
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout upstream source
+        run: git clone --depth 1 --branch "${{ matrix.tag }}" https://github.com/nirs/vmnet-helper upstream
+      - name: Install requirements
+        run: brew install meson diffoscope
+      - name: Build
+        working-directory: upstream
+        run: |
+          meson setup build
+          meson compile -C build
+          ./archive.sh build
+      - name: Test reproducibility
+        working-directory: upstream
+        run: |
+          meson setup repro
+          meson compile -C repro
+          ./archive.sh repro
+          diffoscope build/vmnet-helper-*.tar.gz repro/vmnet-helper-*.tar.gz
+      - name: Upload artifact to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: upstream
+        run: |
+          tarball=$(ls build/vmnet-helper-*.tar.gz)
+          gh release upload "${{ matrix.tag }}" "$tarball" --clobber
+      - name: Upload latest artifact
+        if: matrix.platform == 'macos-13' && matrix.tag == needs.discover.outputs.latest_tag
+        uses: actions/upload-artifact@v4
+        with:
+          name: latest-tarball
+          path: upstream/build/vmnet-helper-*.tar.gz
+
+  latest:
+    needs: [discover, build]
+    if: needs.discover.outputs.tags != '[]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Configure git
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email github-actions[bot]@users.noreply.github.com
+      - name: Update latest tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LATEST_TAG: ${{ needs.discover.outputs.latest_tag }}
+        run: |
+          set -euo pipefail
+          git fetch origin --tags
+          git fetch origin "refs/tags/$LATEST_TAG:refs/tags/$LATEST_TAG"
+          git tag -f latest "$LATEST_TAG"
+          git push origin :refs/tags/latest
+          git push origin refs/tags/latest
+          gh release delete latest -y || true
+      - name: Download latest artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: latest-tarball
+      - name: Create latest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create latest latest-tarball/vmnet-helper-*.tar.gz -t latest -n "Latest release"
