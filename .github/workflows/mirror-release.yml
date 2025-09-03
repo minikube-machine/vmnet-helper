@@ -138,15 +138,15 @@ jobs:
 
             # Write body to a file (safer than inline heredoc inside command substitution)
             cat > body.txt <<EOF
-Mirrored upstream release ${tag}
+            Mirrored upstream release ${tag}
 
-Upstream repository: nirs/vmnet-helper
-Upstream tag: ${tag}
-Upstream commit: ${upstream_commit}
+            Upstream repository: nirs/vmnet-helper
+            Upstream tag: ${tag}
+            Upstream commit: ${upstream_commit}
 
-Artifacts in this release are rebuilt from upstream source (see workflow logs for reproducibility details).
-NOTE: The tag in this repo points to a local commit (not the upstream commit); upstream commit recorded above.
-EOF
+            Artifacts in this release are rebuilt from upstream source (see workflow logs for reproducibility details).
+            NOTE: The tag in this repo points to a local commit (not the upstream commit); upstream commit recorded above.
+            EOF
 
             gh release create "${tag}" -t "${tag}" -F body.txt
             echo "Created release ${tag}"
