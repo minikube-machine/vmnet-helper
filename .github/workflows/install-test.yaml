@@ -32,7 +32,7 @@ jobs:
       - name: 📥 Download and Install vmnet-helper
         run: |
           set -x
-          curl -fsSL "https://github.com/${{ github.repository }}/releases/latest/download/install.sh" | sudo VMNET_INTERACTIVE=0 bash
+          curl -fsSL "https://github.com/${{ github.repository }}/releases/latest/download/install.sh" | VMNET_INTERACTIVE=0 bash
           echo $?
       - name: ✅ Check vmnet-helper version
         id: get_version
